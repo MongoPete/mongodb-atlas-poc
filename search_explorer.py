@@ -565,6 +565,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helve
 }
 .result-card.expanded .rc-expand { display: block; }
 
+.pr-role-players { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.rp-pill {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: 6px; font-size: 12px; border: 1px solid var(--border);
+}
+.rp-pill.rp-matched { background: rgba(63,185,80,0.05); border-color: rgba(63,185,80,0.2); }
+.rp-pill.rp-unmatched { background: rgba(248,81,73,0.05); border-color: rgba(248,81,73,0.2); }
+.rp-role { font-weight: 700; text-transform: uppercase; font-size: 10px; min-width: 80px; }
+.rp-name { color: #e6edf3; font-weight: 600; }
+.rp-addr { color: var(--text3); }
+.rp-duns { margin-left: auto; font-family: monospace; font-size: 11px; color: var(--blue); background: rgba(88,166,255,0.1); padding: 1px 6px; border-radius: 3px; }
+.rp-no-duns { margin-left: auto; font-size: 10px; color: #f85149; font-style: italic; }
+.pr-filing-title { font-size: 14px; }
+
 .typo-compare {
   border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
 }
@@ -820,26 +834,44 @@ function renderTradeCard(r, idx, maxScore) {
 }
 
 function renderPRCard(r, idx, maxScore) {
-  const rp = (r.role_players || [])[0] || {};
-  const name = rp.names?.[0]?.name || '?';
+  const rolePlayers = r.role_players || [];
+  const src = r._source_collection || r.filing_type || '?';
   const score = r.score || 0;
   const pct = maxScore > 0 ? (score / maxScore * 100) : 0;
-  const src = r._source_collection || '?';
+  const amount = r.amount;
+  const statusColor = {'open':'#3fb950','pending':'#d29922','closed':'#8b949e','appealed':'#f0883e'}[r.filing_status] || '#8b949e';
 
-  return `<div class="result-card" onclick="this.classList.toggle('expanded')">
+  let rpHtml = '';
+  rolePlayers.forEach(rp => {
+    const rpName = rp.names?.[0]?.name || 'Unknown';
+    const rpAddr = rp.addresses?.[0] || {};
+    const rpAddrStr = [rpAddr.city, rpAddr.state].filter(Boolean).join(', ');
+    const hasDuns = !!rp.duns_number;
+    const polColor = {'positive':'#3fb950','negative':'#f85149','neutral':'#8b949e'}[rp.polarity] || '#8b949e';
+    rpHtml += `<div class="rp-pill${hasDuns ? ' rp-matched' : ' rp-unmatched'}">
+      <span class="rp-role" style="color:${polColor}">${esc(rp.role_type || '?')}</span>
+      <span class="rp-name">${esc(rpName)}</span>
+      ${rpAddrStr ? `<span class="rp-addr">${esc(rpAddrStr)}</span>` : ''}
+      ${hasDuns ? `<span class="rp-duns">${esc(rp.duns_number)}</span>` : '<span class="rp-no-duns">unmatched</span>'}
+    </div>`;
+  });
+
+  return `<div class="result-card pr-card" onclick="this.classList.toggle('expanded')">
     <div class="rc-header">
       <span class="rank">#${idx + 1}</span>
-      <span class="company-name">${esc(name)}</span>
+      <span class="company-name pr-filing-title">${esc(src.toUpperCase())} — ${esc(r.case_number || r.filing_id || '?')}</span>
       <span class="duns-badge" style="background:rgba(210,168,255,0.1);color:#d2a8ff">${esc(src)}</span>
     </div>
-    <div class="rc-address">Filing: ${esc(r.filing_type || '?')} &mdash; ${esc(r.filing_id || '?')}</div>
+    <div class="rc-address">${esc(r.court || '')}${r.jurisdiction ? ' (' + esc(r.jurisdiction) + ')' : ''} &mdash; Filed: ${esc(r.filed_date || '?')}</div>
     <div class="rc-meta">
       <span>Score: <strong style="color:${scoreColor(score, maxScore)}">${score.toFixed(2)}</strong>
         <span class="score-bar"><span class="score-fill" style="width:${pct}%;background:${scoreColor(score, maxScore)}"></span></span>
       </span>
-      <span>Matched: <strong>${r.matched ? 'Yes' : 'No'}</strong></span>
-      <span>Role: ${esc(rp.role_type || '?')}</span>
+      ${amount ? `<span>Amount: <strong>$${Number(amount).toLocaleString()}</strong></span>` : ''}
+      <span>Status: <strong style="color:${statusColor}">${esc(r.filing_status || '?')}</strong></span>
+      <span>Role Players: <strong>${rolePlayers.length}</strong></span>
     </div>
+    <div class="pr-role-players">${rpHtml}</div>
     <div class="rc-expand">${esc(JSON.stringify(r, null, 2))}</div>
   </div>`;
 }
@@ -847,6 +879,11 @@ function renderPRCard(r, idx, maxScore) {
 function renderCard(r, idx, maxScore, type) {
   if (type === 'trade') return renderTradeCard(r, idx, maxScore);
   if (type === 'public_records') return renderPRCard(r, idx, maxScore);
+  if (type === 'duns_lookup') {
+    const src = r._source_collection || '';
+    if (src === 'duns') return renderCoreCard(r, idx, maxScore);
+    if (src) return renderPRCard(r, idx, maxScore);
+  }
   return renderCoreCard(r, idx, maxScore);
 }
 
