@@ -308,29 +308,36 @@ let activeFilter = 'all';
 let sortNewest = true;
 
 /* ---- Filter buttons ---- */
-document.querySelectorAll('.fbtn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    activeFilter = btn.dataset.bucket;
-    document.getElementById('filter-clear').classList.toggle('visible', activeFilter !== 'all');
-    applyFilter();
-  });
-});
-
-document.querySelectorAll('.stat[data-filter]').forEach(stat => {
-  stat.addEventListener('click', () => {
-    const f = stat.dataset.filter;
-    activeFilter = f;
-    document.querySelectorAll('.fbtn').forEach(b => {
-      b.classList.toggle('active', b.dataset.bucket === f);
+function initFilters() {
+  document.querySelectorAll('.fbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.fbtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeFilter = btn.dataset.bucket;
+      document.getElementById('filter-clear').classList.toggle('visible', activeFilter !== 'all');
+      applyFilter();
     });
-    document.querySelectorAll('.stat[data-filter]').forEach(s => s.classList.remove('active-filter'));
-    if (f !== 'all') stat.classList.add('active-filter');
-    document.getElementById('filter-clear').classList.toggle('visible', f !== 'all');
-    applyFilter();
   });
-});
+
+  document.querySelectorAll('.stat[data-filter]').forEach(stat => {
+    stat.addEventListener('click', () => {
+      const f = stat.dataset.filter;
+      activeFilter = f;
+      document.querySelectorAll('.fbtn').forEach(b => {
+        b.classList.toggle('active', b.dataset.bucket === f);
+      });
+      document.querySelectorAll('.stat[data-filter]').forEach(s => s.classList.remove('active-filter'));
+      if (f !== 'all') stat.classList.add('active-filter');
+      document.getElementById('filter-clear').classList.toggle('visible', f !== 'all');
+      applyFilter();
+    });
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initFilters);
+} else {
+  initFilters();
+}
 
 function clearFilters() {
   activeFilter = 'all';
