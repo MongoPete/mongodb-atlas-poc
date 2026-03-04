@@ -27,7 +27,7 @@ import threading
 from datetime import datetime
 
 import pymongo
-from flask import Flask, Response, render_template_string
+from flask import Flask, Response, render_template_string, jsonify
 
 from locust_db_config import resolve_config
 
@@ -122,6 +122,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   .fbtn.active.f-financial { background: #79c0ff; border-color: #79c0ff; color: #0d1117; }
   .fbtn.active.f-score { background: #d2a8ff; border-color: #d2a8ff; color: #0d1117; }
   .fbtn.active.f-bulk { background: #f0883e; border-color: #f0883e; color: #0d1117; }
+  .fbtn.active.f-pr { background: #ffa657; border-color: #ffa657; color: #0d1117; }
   .fbtn.active.f-cascade { background: #38ada9; border-color: #38ada9; color: #0d1117; }
   .fbtn.active.f-update { background: #d29922; border-color: #d29922; color: #0d1117; }
   .fbtn .fcount { margin-left: 4px; opacity: 0.7; }
@@ -186,6 +187,8 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   .badge.cascade { background: rgba(56,173,169,0.2); color: #38ada9; }
   .bucket-tag.bt-cascade { background: rgba(56,173,169,0.15); color: #38ada9; }
   .ev.cascade { border-left-color: #38ada9; }
+  .bucket-tag.bt-pr { background: rgba(255,166,87,0.15); color: #ffa657; }
+  .stat.public_records .val { color: #ffa657; }
 
   .event .duns { color: #58a6ff; font-weight: 600; font-family: monospace; }
   .event .action { color: #8b949e; font-size: 12px; }
@@ -247,6 +250,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   <div class="stat financial" data-filter="financial" title="Filter: Financial"><div class="val" id="s-fin">0</div><div class="label">Financial</div></div>
   <div class="stat score" data-filter="score" title="Filter: Score Updates"><div class="val" id="s-score">0</div><div class="label">Score Updates</div></div>
   <div class="stat bulk" data-filter="bulk" title="Filter: Bulk File"><div class="val" id="s-bulk">0</div><div class="label">Bulk File</div></div>
+  <div class="stat public_records" data-filter="public_records" title="Filter: Public Records"><div class="val" id="s-pr">0</div><div class="label">Public Records</div></div>
   <div class="stat cascade" data-filter="cascade" title="Filter: Cascade Updates"><div class="val" id="s-cascade">0</div><div class="label">Cascades</div></div>
   <div class="stat rate"><div class="val" id="s-rate">&mdash;</div><div class="label">Change Rate</div></div>
 </div>
@@ -260,10 +264,12 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
   <button class="fbtn f-financial" data-bucket="financial">Financial</button>
   <button class="fbtn f-score" data-bucket="score">Score</button>
   <button class="fbtn f-bulk" data-bucket="bulk">Bulk File</button>
+  <button class="fbtn f-pr" data-bucket="public_records">Public Records</button>
   <button class="fbtn f-cascade" data-bucket="cascade">Cascade</button>
   <button class="fbtn f-update" data-bucket="update">Core Updates</button>
   <span class="filter-clear" id="filter-clear" onclick="clearFilters()">Clear filters</span>
   <button class="sort-toggle" id="sort-toggle" onclick="toggleSort()" title="Toggle newest/oldest first">Newest First</button>
+  <button class="sort-toggle" onclick="resetFeed()" title="Clear all events and reset counters" style="margin-left:4px;color:#f85149;border-color:#f8514933;">Reset Feed</button>
 </div>
 
 <div class="feed-container">
@@ -339,6 +345,25 @@ if (document.readyState === 'loading') {
   initFilters();
 }
 
+function resetFeed() {
+  const streamPath = typeof evtSource !== 'undefined' && evtSource.url && evtSource.url.includes('/api/cs/') ? '/api/cs/reset' : '/reset';
+  fetch(streamPath, {method: 'POST'});
+  feed.querySelectorAll('.event').forEach(ev => ev.remove());
+  if (!document.getElementById('empty')) {
+    const e = document.createElement('div');
+    e.className = 'empty-state'; e.id = 'empty';
+    e.textContent = 'Feed cleared. Waiting for new events...';
+    feed.appendChild(e);
+  }
+  ['s-total','s-pub','s-sup','s-name','s-fin','s-score','s-bulk','s-pr','s-cascade'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '0';
+  });
+  ['sb-bulk','sb-bulksup','sb-name','sb-fin','sb-score'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '0';
+  });
+  document.getElementById('s-rate').textContent = '—';
+}
+
 function clearFilters() {
   activeFilter = 'all';
   document.querySelectorAll('.fbtn').forEach(b => {
@@ -378,6 +403,11 @@ const evtSource = new EventSource('/stream');
 evtSource.onmessage = function(e) {
   const d = JSON.parse(e.data);
 
+  if (d.type === 'reset') {
+    feed.querySelectorAll('.event').forEach(ev => ev.remove());
+    return;
+  }
+
   if (d.type !== 'event') {
     if (d.type === 'stats') {
       document.getElementById('s-total').textContent = d.total;
@@ -387,6 +417,7 @@ evtSource.onmessage = function(e) {
       document.getElementById('s-fin').textContent = d.financial_updates;
       document.getElementById('s-score').textContent = d.score_updates;
       document.getElementById('s-bulk').textContent = d.bulk_changes + d.bulk_suppressed;
+      if (d.public_records !== undefined) document.getElementById('s-pr').textContent = d.public_records;
       if (d.cascades !== undefined) document.getElementById('s-cascade').textContent = d.cascades;
       document.getElementById('sb-bulk').textContent = d.bulk_changes;
       document.getElementById('sb-bulksup').textContent = d.bulk_suppressed;
@@ -445,6 +476,22 @@ evtSource.onmessage = function(e) {
 @app.route('/')
 def index():
     return render_template_string(DASHBOARD_HTML)
+
+
+@app.route('/reset', methods=['POST'])
+def reset_feed():
+    with stats_lock:
+        for k in stats:
+            if k == 'start_time':
+                stats[k] = datetime.utcnow().isoformat()
+            else:
+                stats[k] = 0
+    while not event_queue.empty():
+        try: event_queue.get_nowait()
+        except queue.Empty: break
+    try: event_queue.put_nowait({'type': 'reset'})
+    except queue.Full: pass
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/stream')

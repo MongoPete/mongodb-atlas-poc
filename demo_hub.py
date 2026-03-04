@@ -74,7 +74,7 @@ cs_stats = {
     'published': 0, 'suppressed': 0,
     'name_changes': 0, 'financial_updates': 0, 'score_updates': 0,
     'bulk_changes': 0, 'bulk_suppressed': 0,
-    'cascades': 0,
+    'cascades': 0, 'public_records': 0,
     'start_time': None,
 }
 cs_stats_lock = threading.Lock()
@@ -162,6 +162,7 @@ def _bucket_tag(bucket):
         'name': ('NAME', 'bt-name'), 'financial': ('FINANCIAL', 'bt-financial'),
         'score': ('SCORE', 'bt-score'), 'bulk': ('BULK', 'bt-bulk'),
         'cascade': ('CASCADE', 'bt-cascade'),
+        'public_records': ('PR', 'bt-pr'),
     }
     if bucket in labels:
         text, cls = labels[bucket]
@@ -262,15 +263,34 @@ def format_event_html(event):
         html = f'<div class="ev-header"><span class="ts">{ts}</span> {badge} {bucket_tags} <span class="coll">{ns_coll}</span> DUNS=<span class="duns">{_escape_html(duns_str)}</span></div>{detail_html}<div class="expand-detail">{_escape_html(raw_detail)}</div>'
         return {'html': html, 'css_class': css_class, 'buckets': buckets, 'type': 'event'}
 
+    pr_collections = {'suits', 'liens', 'judgments', 'uccs', 'bankruptcies'}
+
     if op == 'insert' and not is_audit:
+        is_pr = ns_coll in pr_collections
         css_class = 'insert'; badge = '<span class="badge ins">INSERT</span>'; buckets.append('publish')
+        if is_pr:
+            buckets.append('public_records')
+            with cs_stats_lock: cs_stats['public_records'] += 1
         detail_html = ''
         if 'fullDocument' in event:
             doc = event['fullDocument']
-            name = _escape_html(doc.get('current', {}).get('name', ''))
-            if name: detail_html = f'<div class="detail">{name}</div>'
-        html = f'<div class="ev-header"><span class="ts">{ts}</span> {badge} <span class="coll">{ns_coll}</span> DUNS=<span class="duns">{_escape_html(doc_id)}</span></div>{detail_html}<div class="expand-detail">{_escape_html(raw_detail)}</div>'
+            if is_pr:
+                ftype = _escape_html(doc.get('filing_type', ns_coll))
+                fid = _escape_html(doc.get('filing_id', ''))
+                rp_count = len(doc.get('role_players', []))
+                matched = doc.get('matched', False)
+                detail_html = f'<div class="detail">{ftype} filing — {rp_count} role player{"s" if rp_count != 1 else ""}{" (matched)" if matched else " (unmatched)"}</div>'
+            else:
+                name = _escape_html(doc.get('current', {}).get('name', ''))
+                if name: detail_html = f'<div class="detail">{name}</div>'
+        label = _escape_html(doc.get('filing_id', doc_id)) if is_pr else _escape_html(doc_id)
+        html = f'<div class="ev-header"><span class="ts">{ts}</span> {badge} {"".join(_bucket_tag(b) for b in buckets if b != "publish")} <span class="coll">{ns_coll}</span> {"ID" if is_pr else "DUNS"}=<span class="duns">{label}</span></div>{detail_html}<div class="expand-detail">{_escape_html(raw_detail)}</div>'
         return {'html': html, 'css_class': css_class, 'buckets': buckets, 'type': 'event'}
+
+    if op in ('insert', 'update', 'replace'):
+        css_class = 'update'; badge = f'<span class="badge upd">{op.upper()}</span>'
+        html = f'<div class="ev-header"><span class="ts">{ts}</span> {badge} <span class="coll">{ns_coll}</span> ID=<span class="duns">{_escape_html(doc_id)}</span></div><div class="expand-detail">{_escape_html(raw_detail)}</div>'
+        return {'html': html, 'css_class': css_class, 'buckets': ['update'], 'type': 'event'}
 
     return None
 
@@ -279,8 +299,8 @@ def watch_changes(uri, db_name, collection_name):
     client = pymongo.MongoClient(uri, socketTimeoutMS=30000, connectTimeoutMS=5000)
     db = client[db_name]
     audit_name = f'{collection_name}_audit'
-    pipeline = [{'$match': {'operationType': {'$in': ['insert', 'update', 'replace', 'delete']}, 'ns.coll': {'$in': [collection_name, audit_name]}}}]
-    print(f'[change-stream] Watching {db_name}.{collection_name} + {audit_name}')
+    pipeline = [{'$match': {'operationType': {'$in': ['insert', 'update', 'replace', 'delete']}}}]
+    print(f'[change-stream] Watching all collections in {db_name}')
     with cs_stats_lock:
         cs_stats['start_time'] = datetime.utcnow().isoformat()
     stream = db.watch(pipeline, full_document='updateLookup')
@@ -430,6 +450,25 @@ def introduce_typo(text):
 # ================================================================== #
 
 # --- Change Stream ---
+@app.route('/api/cs/reset', methods=['POST'])
+def cs_reset():
+    with cs_stats_lock:
+        for k in cs_stats:
+            if k == 'start_time':
+                cs_stats[k] = datetime.utcnow().isoformat()
+            else:
+                cs_stats[k] = 0
+    with recent_events_lock:
+        recent_events.clear()
+    while not event_queue.empty():
+        try: event_queue.get_nowait()
+        except queue.Empty: break
+    reset_evt = {'type': 'reset'}
+    try: event_queue.put_nowait(reset_evt)
+    except queue.Full: pass
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/cs/stream')
 def cs_stream():
     def generate():
