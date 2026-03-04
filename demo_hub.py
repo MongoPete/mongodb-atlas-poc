@@ -662,7 +662,7 @@ def _port_open(port):
         return False
 
 
-def _start_locust(key):
+def _start_locust(key, overrides=None):
     spec = LOCUST_SCRIPTS[key]
     if _port_open(spec['port']):
         return {'status': 'already_running', 'port': spec['port']}
@@ -676,6 +676,8 @@ def _start_locust(key):
         env['MONGODB_URI'] = cfg.connection_string
         env['MONGODB_DATABASE'] = cfg.database_name
     env.update(spec.get('env_extra', {}))
+    if overrides:
+        env.update(overrides)
 
     cwd = os.path.dirname(os.path.abspath(__file__))
     cmd = [sys.executable, '-m', 'locust', '-f', spec['file'], '--web-port', str(spec['port'])]
@@ -704,11 +706,24 @@ def _cleanup_locust():
 atexit.register(_cleanup_locust)
 
 
+LOCUST_PARAMS = {
+    'seed-core':  [('LOCUST_BULK_SIZE', 'Bulk Size', '100'), ('MONGODB_COLLECTION', 'Collection', 'duns')],
+    'seed-pr':    [('LOCUST_BULK_SIZE', 'Bulk Size', '200'), ('MONGODB_COLLECTION', 'Collection', 'suits')],
+    'search':     [('LOCUST_CANDIDATE_LIMIT', 'Result Limit', '10')],
+    'ops':        [('LOCUST_BULK_FILE_SIZE', 'Batch Size', '50'), ('MONGODB_COLLECTION', 'Collection', 'duns')],
+}
+
+
 @app.route('/api/locust/start/<key>')
 def api_locust_start(key):
     if key not in LOCUST_SCRIPTS:
         return jsonify({'error': f'Unknown script: {key}'}), 400
-    return jsonify(_start_locust(key))
+    overrides = {}
+    for env_key, _, _ in LOCUST_PARAMS.get(key, []):
+        val = request.args.get(env_key)
+        if val:
+            overrides[env_key] = val
+    return jsonify(_start_locust(key, overrides or None))
 
 
 @app.route('/api/locust/stop/<key>')
@@ -716,6 +731,20 @@ def api_locust_stop(key):
     if key not in LOCUST_SCRIPTS:
         return jsonify({'error': f'Unknown script: {key}'}), 400
     return jsonify(_stop_locust(key))
+
+
+@app.route('/api/locust/restart/<key>')
+def api_locust_restart(key):
+    if key not in LOCUST_SCRIPTS:
+        return jsonify({'error': f'Unknown script: {key}'}), 400
+    _stop_locust(key)
+    import time as _t; _t.sleep(1)
+    overrides = {}
+    for env_key, _, _ in LOCUST_PARAMS.get(key, []):
+        val = request.args.get(env_key)
+        if val:
+            overrides[env_key] = val
+    return jsonify(_start_locust(key, overrides or None))
 
 
 @app.route('/api/locust/status')
@@ -825,21 +854,34 @@ def page_locust(key):
     port = spec['port']
     label = spec['label']
     nav_key = f'l-{key}'
+    params = LOCUST_PARAMS.get(key, [])
+    param_inputs = ''.join(
+        f'<label class="param-group"><span class="param-label">{plabel}</span>'
+        f'<input type="text" class="param-input" id="p-{env_key}" value="{default}" data-env="{env_key}"></label>'
+        for env_key, plabel, default in params
+    )
+    param_json = json.dumps([{'env': e, 'default': d} for e, _, d in params])
     return f'''<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>MongoDB Atlas PoC — {label}</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d1117;color:#c9d1d9;}}
-.locust-bar{{display:flex;align-items:center;gap:12px;padding:8px 20px;background:#161b22;border-bottom:1px solid #30363d;}}
-.locust-bar .status{{width:10px;height:10px;border-radius:50%;}}
+.locust-bar{{display:flex;align-items:center;gap:10px;padding:8px 20px;background:#161b22;border-bottom:1px solid #30363d;flex-wrap:wrap;}}
+.locust-bar .status{{width:10px;height:10px;border-radius:50%;flex-shrink:0;}}
 .locust-bar .status.on{{background:#3fb950;box-shadow:0 0 6px #3fb95088;}}
 .locust-bar .status.off{{background:#f85149;}}
-.locust-bar .label{{font-size:13px;color:#e6edf3;font-weight:600;}}
+.locust-bar .label{{font-size:13px;color:#e6edf3;font-weight:600;white-space:nowrap;}}
 .locust-bar button{{padding:5px 16px;border-radius:6px;border:1px solid #30363d;font-size:12px;cursor:pointer;transition:all 0.15s;font-weight:500;}}
 .btn-start{{background:#238636;color:#fff;border-color:#238636;}}
 .btn-start:hover{{background:#2ea043;}}
 .btn-stop{{background:#da3633;color:#fff;border-color:#da3633;}}
 .btn-stop:hover{{background:#f85149;}}
-.locust-bar .port{{font-size:11px;color:#484f58;margin-left:auto;}}
+.btn-restart{{background:#1f6feb;color:#fff;border-color:#1f6feb;}}
+.btn-restart:hover{{background:#388bfd;}}
+.param-group{{display:flex;align-items:center;gap:4px;margin-left:4px;}}
+.param-label{{font-size:11px;color:#8b949e;white-space:nowrap;}}
+.param-input{{width:70px;padding:4px 8px;border-radius:4px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;font-size:12px;font-family:monospace;}}
+.param-input:focus{{border-color:#58a6ff;outline:none;}}
+.locust-bar .port{{font-size:11px;color:#484f58;margin-left:auto;white-space:nowrap;}}
 iframe{{width:100%;height:calc(100vh - 85px);border:none;background:#fff;}}
 .loading{{display:flex;align-items:center;justify-content:center;height:calc(100vh - 85px);flex-direction:column;gap:12px;}}
 .loading .spinner{{width:32px;height:32px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin 0.8s linear infinite;}}
@@ -849,7 +891,9 @@ iframe{{width:100%;height:calc(100vh - 85px);border:none;background:#fff;}}
 <div class="locust-bar">
   <div class="status off" id="indicator"></div>
   <span class="label">{label}</span>
+  {param_inputs}
   <button class="btn-start" id="btnStart" onclick="startLocust()">Start</button>
+  <button class="btn-restart" id="btnRestart" onclick="restartLocust()" style="display:none;" title="Apply new settings and restart">Apply &amp; Restart</button>
   <button class="btn-stop" id="btnStop" onclick="stopLocust()" style="display:none;">Stop</button>
   <span class="port" id="portLabel">Port {port}</span>
 </div>
@@ -858,12 +902,32 @@ iframe{{width:100%;height:calc(100vh - 85px);border:none;background:#fff;}}
 </div>
 <script>
 const KEY="{key}", PORT={port};
+const PARAMS={param_json};
 let polling=null;
+
+function getParamQuery() {{
+  const parts=[];
+  document.querySelectorAll('.param-input').forEach(inp=>{{
+    if(inp.value.trim()) parts.push(inp.dataset.env+'='+encodeURIComponent(inp.value.trim()));
+  }});
+  return parts.length ? '?'+parts.join('&') : '';
+}}
 
 function startLocust() {{
   document.getElementById('btnStart').disabled=true;
   document.getElementById('btnStart').textContent='Starting…';
-  fetch('/api/locust/start/'+KEY).then(r=>r.json()).then(d=>{{
+  fetch('/api/locust/start/'+KEY+getParamQuery()).then(r=>r.json()).then(d=>{{
+    pollReady();
+  }});
+}}
+
+function restartLocust() {{
+  document.getElementById('btnRestart').disabled=true;
+  document.getElementById('btnRestart').textContent='Restarting…';
+  document.getElementById('frame-area').innerHTML='<div class="loading"><div class="spinner"></div><span style="color:#8b949e;font-size:13px;">Restarting with new settings…</span></div>';
+  fetch('/api/locust/restart/'+KEY+getParamQuery()).then(r=>r.json()).then(d=>{{
+    document.getElementById('btnRestart').disabled=false;
+    document.getElementById('btnRestart').textContent='Apply & Restart';
     pollReady();
   }});
 }}
@@ -875,7 +939,8 @@ function stopLocust() {{
     document.getElementById('btnStart').disabled=false;
     document.getElementById('btnStart').textContent='Start';
     document.getElementById('btnStop').style.display='none';
-    document.getElementById('frame-area').innerHTML='<div class="loading" id="loader"><div class="spinner" style="animation:none;border-color:#30363d;"></div><span style="color:#8b949e;font-size:13px;">Locust stopped. Click <b>Start</b> to relaunch.</span></div>';
+    document.getElementById('btnRestart').style.display='none';
+    document.getElementById('frame-area').innerHTML='<div class="loading"><div class="spinner" style="animation:none;border-color:#30363d;"></div><span style="color:#8b949e;font-size:13px;">Locust stopped. Click <b>Start</b> to relaunch.</span></div>';
     if(polling) clearInterval(polling);
   }});
 }}
@@ -892,6 +957,7 @@ function pollReady() {{
         clearInterval(polling);
         document.getElementById('btnStart').textContent='Retry';
         document.getElementById('btnStart').disabled=false;
+        document.getElementById('btnStart').style.display='';
       }}
     }});
   }}, 500);
@@ -901,6 +967,7 @@ function showFrame() {{
   document.getElementById('indicator').className='status on';
   document.getElementById('btnStart').style.display='none';
   document.getElementById('btnStop').style.display='';
+  document.getElementById('btnRestart').style.display='';
   document.getElementById('frame-area').innerHTML='<iframe src="http://localhost:'+PORT+'" id="locust-frame"></iframe>';
 }}
 
