@@ -75,6 +75,7 @@ UNMATCHED_RATE = 0.25
 
 # --- Global State ---
 _CLIENT = None
+_REAL_DUNS_POOL = []   # populated on init from the `duns` collection
 
 
 @events.test_stop.add_listener
@@ -141,6 +142,21 @@ class SeedPublicRecordsUser(User):
                 self.coll.create_index([('filed_date', pymongo.DESCENDING)], background=True)
                 print(f"[seed_public_records] Indexes ensured for '{self.filing_type}'. Ready.")
 
+                global _REAL_DUNS_POOL
+                if not _REAL_DUNS_POOL:
+                    try:
+                        cursor = db['duns'].aggregate([
+                            {'$sample': {'size': 500}},
+                            {'$project': {'dunsNumber': 1, 'current.name': 1, '_id': 0}}
+                        ])
+                        _REAL_DUNS_POOL = [
+                            (doc['dunsNumber'], doc.get('current', {}).get('name', ''))
+                            for doc in cursor if doc.get('dunsNumber')
+                        ]
+                        print(f"[seed_public_records] Loaded {len(_REAL_DUNS_POOL)} real DUNS numbers from core collection for cross-linking.")
+                    except Exception as pool_err:
+                        print(f"[seed_public_records] Could not load real DUNS pool (will use random): {pool_err}")
+
             except Exception as e:
                 print(f"[seed_public_records] Initialization failed: {e}")
                 if self.environment:
@@ -167,15 +183,22 @@ class SeedPublicRecordsUser(User):
           - A company can have a physical + mailing address
         '''
         is_matched  = random.random() > UNMATCHED_RATE
-        duns_number = _('person.identifier', mask='#########') if is_matched else None
+        real_name = None
+        if is_matched and _REAL_DUNS_POOL:
+            duns_number, real_name = random.choice(_REAL_DUNS_POOL)
+        elif is_matched:
+            duns_number = _('person.identifier', mask='#########')
+        else:
+            duns_number = None
 
         # Generate 1–2 names for this role player
         name_count = random.randint(1, 2)
         name_types = ['primary', 'trade_style', 'dba', 'former']
+        primary_name = real_name if real_name else _('finance.company')
         names = [
             {
                 'name_type': name_types[i] if i < len(name_types) else 'other',
-                'name':      _('finance.company') if i == 0 else _('finance.company') + ' ' + random.choice(['Inc', 'LLC', 'Co', 'Corp', '']),
+                'name':      primary_name if i == 0 else _('finance.company') + ' ' + random.choice(['Inc', 'LLC', 'Co', 'Corp', '']),
             }
             for i in range(name_count)
         ]

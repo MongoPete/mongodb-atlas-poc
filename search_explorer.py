@@ -224,6 +224,31 @@ def api_search():
     if not name and not city and not state and not street:
         return jsonify({'error': 'Enter at least one search term (name, city, state, or street)'}), 400
 
+    is_duns = name and name.isdigit() and len(name) == 9
+    if is_duns:
+        tic = time.time()
+        pr_collections = ['suits', 'liens', 'judgments', 'uccs', 'bankruptcies']
+        results = []
+        sources_checked = ['duns']
+        doc = db['duns'].find_one({'dunsNumber': name})
+        if doc:
+            doc['_id'] = str(doc['_id'])
+            doc['score'] = 1.0
+            doc['_source_collection'] = 'duns'
+            results.append(doc)
+        for cn in pr_collections:
+            sources_checked.append(cn)
+            for pr_doc in db[cn].find({'role_players.duns_number': name}).limit(5):
+                pr_doc['_id'] = str(pr_doc['_id'])
+                pr_doc['score'] = 0.9
+                pr_doc['_source_collection'] = cn
+                results.append(pr_doc)
+        elapsed = (time.time() - tic) * 1000
+        return jsonify({'results': results, 'count': len(results), 'elapsed_ms': round(elapsed, 1),
+                        'query': {'name': name, 'city': city, 'state': state, 'street': street},
+                        'type': 'duns_lookup', 'duns_lookup': True,
+                        'pipeline': [{'$match': {'dunsNumber': name}}, {'note': f'searched {", ".join(sources_checked)}'}]})
+
     tic = time.time()
     try:
         if search_type == 'core':
@@ -618,7 +643,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helve
 
     <div class="field-group">
       <label>Company / Entity Name (optional)</label>
-      <input type="text" id="q-name" placeholder="e.g. International Business Machines — or search by city/state only" autofocus>
+      <input type="text" id="q-name" placeholder="e.g. International Business Machines, 9-digit DUNS number, or search by city/state" autofocus>
     </div>
 
     <div class="field-group" id="street-group">
@@ -841,7 +866,8 @@ function doSearch() {
 
     if (d.pipeline) showPipeline(d.pipeline);
     const maxScore = d.results.length > 0 ? Math.max(...d.results.map(r => r.score || 0)) : 1;
-    let html = `<div class="results-header"><h2>${d.count} result${d.count!==1?'s':''}</h2><div class="meta"><span class="elapsed">${d.elapsed_ms}ms</span><span>${esc(d.query.name)}${d.query.city ? ', ' + esc(d.query.city) : ''}${d.query.state ? ' ' + esc(d.query.state) : ''}</span></div></div>`;
+    const lookupBadge = d.duns_lookup ? '<span style="background:#1f6feb;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-left:8px;">DUNS LOOKUP</span>' : '';
+    let html = `<div class="results-header"><h2>${d.count} result${d.count!==1?'s':''}${lookupBadge}</h2><div class="meta"><span class="elapsed">${d.elapsed_ms}ms</span><span>${esc(d.query.name)}${d.query.city ? ', ' + esc(d.query.city) : ''}${d.query.state ? ' ' + esc(d.query.state) : ''}</span></div></div>`;
 
     if (d.results.length === 0) {
       html += '<div class="empty-results"><div>No results found</div><div class="hint">Try the Relaxation Demo to see progressive address widening.</div></div>';

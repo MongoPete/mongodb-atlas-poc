@@ -505,6 +505,31 @@ def api_search():
     limit = min(int(body.get('limit', 10)), 25)
     if not name and not city and not state and not street:
         return jsonify({'error': 'Enter at least one search term (name, city, state, or street)'}), 400
+
+    is_duns = name and name.isdigit() and len(name) == 9
+    if is_duns:
+        tic = time.time()
+        results = []
+        sources_checked = ['duns']
+        doc = db['duns'].find_one({'dunsNumber': name})
+        if doc:
+            doc['_id'] = str(doc['_id'])
+            doc['score'] = 1.0
+            doc['_source_collection'] = 'duns'
+            results.append(doc)
+        for cn in PR_COLLECTIONS:
+            sources_checked.append(cn)
+            for pr_doc in db[cn].find({'role_players.duns_number': name}).limit(5):
+                pr_doc['_id'] = str(pr_doc['_id'])
+                pr_doc['score'] = 0.9
+                pr_doc['_source_collection'] = cn
+                results.append(pr_doc)
+        elapsed = (time.time() - tic) * 1000
+        return jsonify({'results': results, 'count': len(results), 'elapsed_ms': round(elapsed, 1),
+                        'query': {'name': name, 'city': city, 'state': state, 'street': street},
+                        'type': 'duns_lookup', 'duns_lookup': True,
+                        'pipeline': [{'$match': {'dunsNumber': name}}, {'note': f'searched {", ".join(sources_checked)}'}]})
+
     tic = time.time()
     try:
         pipeline = None
