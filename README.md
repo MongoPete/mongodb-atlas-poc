@@ -47,8 +47,7 @@ cp .env.example .env
 ## Requirements
 
 - **Python 3.10+** (3.12 recommended)
-- **MongoDB Atlas** cluster with the target database
-- **Atlas Search indexes** (for the Search Explorer) — see below
+- **MongoDB Atlas** cluster with the target database (search indexes are created automatically)
 
 ---
 
@@ -120,54 +119,19 @@ cp .env.example .env
 
 ## Atlas Search Indexes
 
-The Search Explorer requires three Atlas Search indexes. Create them in the Atlas UI or via CLI.
+Atlas Search indexes are **created automatically** when the hub starts or when `setup.sh` runs.
+No manual index creation is required — just point at an Atlas cluster and go.
 
-### `core_search` (on `duns` collection)
+The following indexes are provisioned:
 
-```json
-{
-  "mappings": {
-    "dynamic": false,
-    "fields": {
-      "current.name": { "type": "string", "analyzer": "lucene.standard" },
-      "current.address.line1": { "type": "string", "analyzer": "lucene.standard" },
-      "current.address.city": { "type": "string", "analyzer": "lucene.standard" },
-      "current.address.state": { "type": "string", "analyzer": "lucene.standard" },
-      "dunsNumber": { "type": "string", "analyzer": "lucene.keyword" }
-    }
-  }
-}
-```
+| Index Name | Collection(s) | Fields |
+|---|---|---|
+| `core_search` | `duns` | `current.name`, `current.address.line1`, `.city`, `.state`, `dunsNumber` |
+| `trade_search` | `entity_trade` | `account.name`, `account.address.city`, `.state` |
+| `public_records_search` | `suits`, `liens`, `judgments`, `uccs`, `bankruptcies` | `role_players.names.name`, `role_players.addresses.city`, `.state` |
 
-### `trade_search` (on `entity_trade` collection)
-
-```json
-{
-  "mappings": {
-    "dynamic": false,
-    "fields": {
-      "account.name": { "type": "string", "analyzer": "lucene.standard" },
-      "account.address.city": { "type": "string", "analyzer": "lucene.standard" },
-      "account.address.state": { "type": "string", "analyzer": "lucene.standard" }
-    }
-  }
-}
-```
-
-### `public_records_search` (on each of: `suits`, `liens`, `judgments`, `uccs`, `bankruptcies`)
-
-```json
-{
-  "mappings": {
-    "dynamic": false,
-    "fields": {
-      "role_players.names.name": { "type": "string", "analyzer": "lucene.standard" },
-      "role_players.addresses.city": { "type": "string", "analyzer": "lucene.standard" },
-      "role_players.addresses.state": { "type": "string", "analyzer": "lucene.standard" }
-    }
-  }
-}
-```
+> **Note:** Indexes build asynchronously on Atlas (1–5 minutes depending on collection size).
+> Search may return errors briefly after the first launch while indexes are building.
 
 ---
 

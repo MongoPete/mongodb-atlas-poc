@@ -60,6 +60,94 @@ def get_db():
 
 
 # ================================================================== #
+#  AUTO-PROVISION ATLAS SEARCH INDEXES                                 #
+# ================================================================== #
+
+SEARCH_INDEX_DEFS = [
+    {
+        'collection': 'duns',
+        'name': 'core_search',
+        'definition': {
+            'mappings': {
+                'dynamic': False,
+                'fields': {
+                    'current.name':          {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'current.address.line1':  {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'current.address.city':   {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'current.address.state':  {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'dunsNumber':            {'type': 'string', 'analyzer': 'lucene.keyword'},
+                },
+            },
+        },
+    },
+    {
+        'collection': 'entity_trade',
+        'name': 'trade_search',
+        'definition': {
+            'mappings': {
+                'dynamic': False,
+                'fields': {
+                    'account.name':           {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'account.address.city':    {'type': 'string', 'analyzer': 'lucene.standard'},
+                    'account.address.state':   {'type': 'string', 'analyzer': 'lucene.standard'},
+                },
+            },
+        },
+    },
+]
+
+PR_SEARCH_DEF = {
+    'name': 'public_records_search',
+    'definition': {
+        'mappings': {
+            'dynamic': False,
+            'fields': {
+                'role_players.names.name':       {'type': 'string', 'analyzer': 'lucene.standard'},
+                'role_players.addresses.city':    {'type': 'string', 'analyzer': 'lucene.standard'},
+                'role_players.addresses.state':   {'type': 'string', 'analyzer': 'lucene.standard'},
+            },
+        },
+    },
+}
+
+for _pr_coll in PR_COLLECTIONS:
+    SEARCH_INDEX_DEFS.append({
+        'collection': _pr_coll,
+        'name': PR_SEARCH_DEF['name'],
+        'definition': PR_SEARCH_DEF['definition'],
+    })
+
+
+def ensure_search_indexes(db):
+    """Create Atlas Search indexes if they don't already exist.
+    Uses create-and-catch-duplicate strategy to avoid slow list operations."""
+    from pymongo.operations import SearchIndexModel
+    created, skipped = 0, 0
+    for idx_def in SEARCH_INDEX_DEFS:
+        coll = db[idx_def['collection']]
+        idx_name = idx_def['name']
+        try:
+            coll.create_search_index(
+                SearchIndexModel(definition=idx_def['definition'], name=idx_name)
+            )
+            created += 1
+            print(f"[demo-hub]   + '{idx_name}' on '{idx_def['collection']}' (building…)")
+        except Exception as e:
+            err_msg = str(e).lower()
+            code = getattr(e, 'code', None) or 0
+            if code == 68 or 'already exists' in err_msg or 'already defined' in err_msg:
+                skipped += 1
+                continue
+            if code == 26 or 'does not exist' in err_msg:
+                continue
+            print(f"[demo-hub]   ! Could not create '{idx_name}' on '{idx_def['collection']}': {e}")
+    if created:
+        print(f"[demo-hub] {created} search index(es) created (build asynchronously, 1-5 min).")
+    if skipped:
+        print(f"[demo-hub] {skipped} search index(es) already exist — skipped.")
+
+
+# ================================================================== #
 #  CHANGE STREAM ENGINE (from change_stream_dashboard.py)              #
 # ================================================================== #
 
@@ -1062,10 +1150,17 @@ def main():
         print('Set MONGODB_URI and MONGODB_DATABASE env vars, or pass --uri and --db.')
         sys.exit(1)
 
+    db = get_db()
+    if db is not None:
+        print(f'[demo-hub] Database: {db_name}')
+        print('[demo-hub] Ensuring Atlas Search indexes…')
+        ensure_search_indexes(db)
+    else:
+        print(f'[demo-hub] Database: {db_name} (could not connect — indexes skipped)')
+
     t = threading.Thread(target=watch_changes, args=(uri, db_name, collection), daemon=True)
     t.start()
 
-    print(f'[demo-hub] Database: {db_name}')
     print(f'[demo-hub] Change stream watching: {collection}')
     print(f'[demo-hub] Open http://localhost:{args.port} in your browser')
     app.run(host='0.0.0.0', port=args.port, threaded=True)

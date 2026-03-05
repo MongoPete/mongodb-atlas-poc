@@ -72,6 +72,21 @@ MONGODB_COLLECTION=duns
 EOF
 
 echo ""
+echo "Creating Atlas Search indexes (they build in the background)..."
+python -c "
+import os
+os.environ.setdefault('MONGODB_URI', '${uri}')
+os.environ.setdefault('MONGODB_DATABASE', '${dbname}')
+from demo_hub import get_db, ensure_search_indexes
+db = get_db()
+if db:
+    ensure_search_indexes(db)
+    print('  Index creation requests sent. Indexes build asynchronously (1-5 min).')
+else:
+    print('  Could not connect — indexes will be created on first launch.')
+"
+
+echo ""
 echo "============================================"
 echo "  Setup complete!"
 echo "============================================"
@@ -85,4 +100,7 @@ echo "    - Change Stream Dashboard"
 echo "    - Atlas Search Explorer"
 echo "    - Relationship Graph"
 echo "    - Locust Load Testing (4 scripts)"
+echo ""
+echo "  Atlas Search indexes build asynchronously."
+echo "  Search may be unavailable for a few minutes on first run."
 echo ""
