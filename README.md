@@ -180,4 +180,6 @@ python -m locust -f locust_04_ops.py --web-port 8092
 
 ## License
 
-Internal use — MongoDB Solutions Architecture.
+
+Apache 2.0 — See LICENSE file.
+Intended for demonstration and educational use by the MongoDB community.
